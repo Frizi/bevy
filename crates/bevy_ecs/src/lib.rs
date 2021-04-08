@@ -856,12 +856,13 @@ mod tests {
         world.insert_resource(123);
         let resource_id = world
             .components()
-            .get_resource_id(TypeId::of::<i32>())
-            .unwrap();
+            .get_resource_kind(TypeId::of::<i32>())
+            .unwrap()
+            .id();
         let archetype_component_id = world
             .archetypes()
             .resource()
-            .get_archetype_component_id(resource_id)
+            .get_archetype_component_id(resource_id, None)
             .unwrap();
 
         assert_eq!(*world.get_resource::<i32>().expect("resource exists"), 123);
@@ -919,8 +920,9 @@ mod tests {
 
         let current_resource_id = world
             .components()
-            .get_resource_id(TypeId::of::<i32>())
-            .unwrap();
+            .get_resource_kind(TypeId::of::<i32>())
+            .unwrap()
+            .id();
         assert_eq!(
             resource_id, current_resource_id,
             "resource id does not change after removing / re-adding"
@@ -929,7 +931,7 @@ mod tests {
         let current_archetype_component_id = world
             .archetypes()
             .resource()
-            .get_archetype_component_id(current_resource_id)
+            .get_archetype_component_id(current_resource_id, None)
             .unwrap();
 
         assert_eq!(

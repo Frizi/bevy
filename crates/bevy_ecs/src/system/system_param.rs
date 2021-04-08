@@ -1,7 +1,9 @@
 use crate::{
     archetype::{Archetype, Archetypes},
     bundle::Bundles,
-    component::{Component, ComponentTicks, RelationshipId, RelationshipKindId, Relationships},
+    component::{
+        Component, ComponentDescriptor, ComponentTicks, RelationKindId, Relationships, StorageType,
+    },
     entity::{Entities, Entity},
     query::{FilterFetch, FilteredAccess, FilteredAccessSet, QueryState, WorldQuery},
     system::{CommandQueue, Commands, Query, SystemState},
@@ -10,6 +12,7 @@ use crate::{
 pub use bevy_ecs_macros::SystemParam;
 use bevy_ecs_macros::{all_tuples, impl_query_set};
 use std::{
+    any::TypeId,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
@@ -150,8 +153,8 @@ fn assert_component_access_compatibility(
     query_type: &'static str,
     filter_type: &'static str,
     // FIXME(Relationships) is this right
-    system_access: &FilteredAccessSet<RelationshipKindId>,
-    current: &FilteredAccess<RelationshipKindId>,
+    system_access: &FilteredAccessSet<RelationKindId>,
+    current: &FilteredAccess<RelationKindId>,
     world: &World,
 ) {
     let mut conflicts = system_access.get_conflicts(current);
@@ -163,7 +166,7 @@ fn assert_component_access_compatibility(
         .map(|component_id| {
             world
                 .relationships
-                .get_relationship_kind_info(component_id)
+                .get_relation_kind(component_id)
                 .unwrap()
                 .data_layout()
                 .name()
@@ -218,7 +221,7 @@ impl<'w, T: Component> Deref for Res<'w, T> {
 
 /// The [`SystemParamState`] of [`Res`].
 pub struct ResState<T> {
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<T>,
 }
 
@@ -232,13 +235,7 @@ unsafe impl<T: Component> SystemParamState for ResState<T> {
     type Config = ();
 
     fn init(world: &mut World, system_state: &mut SystemState, _config: Self::Config) -> Self {
-        let component_id = world.initialize_resource::<T>();
-        let kind_id = world
-            .relationships
-            .get_relationship_info(component_id)
-            .unwrap()
-            .0
-            .id();
+        let kind_id = world.initialize_resource::<T>();
         let combined_access = system_state.component_access_set.combined_access_mut();
         if combined_access.has_write(kind_id) {
             panic!(
@@ -249,13 +246,13 @@ unsafe impl<T: Component> SystemParamState for ResState<T> {
 
         let resource_archetype = world.archetypes.resource();
         let archetype_component_id = resource_archetype
-            .get_archetype_component_id(component_id)
+            .get_archetype_component_id(kind_id, None)
             .unwrap();
         system_state
             .archetype_component_access
             .add_read(archetype_component_id);
         Self {
-            component_id,
+            component_id: kind_id,
             marker: PhantomData,
         }
     }
@@ -375,7 +372,7 @@ impl<'w, T: Component> DerefMut for ResMut<'w, T> {
 
 /// The [`SystemParamState`] of [`ResMut`].
 pub struct ResMutState<T> {
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<T>,
 }
 
@@ -389,13 +386,7 @@ unsafe impl<T: Component> SystemParamState for ResMutState<T> {
     type Config = ();
 
     fn init(world: &mut World, system_state: &mut SystemState, _config: Self::Config) -> Self {
-        let component_id = world.initialize_resource::<T>();
-        let kind_id = world
-            .relationships
-            .get_relationship_info(component_id)
-            .unwrap()
-            .0
-            .id();
+        let kind_id = world.initialize_resource::<T>();
         let combined_access = system_state.component_access_set.combined_access_mut();
         if combined_access.has_write(kind_id) {
             panic!(
@@ -410,13 +401,13 @@ unsafe impl<T: Component> SystemParamState for ResMutState<T> {
 
         let resource_archetype = world.archetypes.resource();
         let archetype_component_id = resource_archetype
-            .get_archetype_component_id(component_id)
+            .get_archetype_component_id(kind_id, None)
             .unwrap();
         system_state
             .archetype_component_access
             .add_write(archetype_component_id);
         Self {
-            component_id,
+            component_id: kind_id,
             marker: PhantomData,
         }
     }
@@ -621,20 +612,20 @@ impl<'a, T: Component + FromWorld> SystemParamFetch<'a> for LocalState<T> {
 /// ```
 pub struct RemovedComponents<'a, T> {
     world: &'a World,
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<T>,
 }
 
 impl<'a, T> RemovedComponents<'a, T> {
     /// Returns an iterator over the entities that had their `T` [`Component`] removed.
     pub fn iter(&self) -> std::iter::Cloned<std::slice::Iter<'_, Entity>> {
-        self.world.removed_with_id(self.component_id)
+        self.world.removed_with_id(self.component_id, None)
     }
 }
 
 /// The [`SystemParamState`] of [`RemovedComponents`].
 pub struct RemovedComponentsState<T> {
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<T>,
 }
 
@@ -651,8 +642,10 @@ unsafe impl<T: Component> SystemParamState for RemovedComponentsState<T> {
         Self {
             component_id: world
                 .relationships
-                .get_component_info_or_insert::<T>()
-                .1
+                .get_component_kind_or_insert(
+                    TypeId::of::<T>(),
+                    ComponentDescriptor::from_generic::<T>(StorageType::Table),
+                )
                 .id(),
             marker: PhantomData,
         }
@@ -721,7 +714,7 @@ impl<'w, T: 'static> Deref for NonSend<'w, T> {
 
 /// The [`SystemParamState`] of [`NonSend`].
 pub struct NonSendState<T> {
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -737,14 +730,7 @@ unsafe impl<T: 'static> SystemParamState for NonSendState<T> {
     fn init(world: &mut World, system_state: &mut SystemState, _config: Self::Config) -> Self {
         system_state.set_non_send();
 
-        let component_id = world.initialize_non_send_resource::<T>();
-        let kind_id = world
-            .relationships
-            .get_relationship_info(component_id)
-            .unwrap()
-            .0
-            .id();
-
+        let kind_id = world.initialize_non_send_resource::<T>();
         let combined_access = system_state.component_access_set.combined_access_mut();
         if combined_access.has_write(kind_id) {
             panic!(
@@ -755,13 +741,13 @@ unsafe impl<T: 'static> SystemParamState for NonSendState<T> {
 
         let resource_archetype = world.archetypes.resource();
         let archetype_component_id = resource_archetype
-            .get_archetype_component_id(component_id)
+            .get_archetype_component_id(kind_id, None)
             .unwrap();
         system_state
             .archetype_component_access
             .add_read(archetype_component_id);
         Self {
-            component_id,
+            component_id: kind_id,
             marker: PhantomData,
         }
     }
@@ -855,7 +841,7 @@ impl<'a, T: 'static + core::fmt::Debug> core::fmt::Debug for NonSendMut<'a, T> {
 
 /// The [`SystemParamState`] of [`NonSendMut`].
 pub struct NonSendMutState<T> {
-    component_id: RelationshipId,
+    component_id: RelationKindId,
     marker: PhantomData<fn() -> T>,
 }
 
@@ -871,31 +857,32 @@ unsafe impl<T: 'static> SystemParamState for NonSendMutState<T> {
     fn init(world: &mut World, system_state: &mut SystemState, _config: Self::Config) -> Self {
         system_state.set_non_send();
 
-        let (kind_id, component_id) = world
-            .relationships
-            .get_non_send_resource_info_or_insert::<T>();
+        let kind_info = world.relationships.get_resource_kind_or_insert(
+            TypeId::of::<T>(),
+            ComponentDescriptor::non_send_from_generic::<T>(StorageType::Table),
+        );
 
         let combined_access = system_state.component_access_set.combined_access_mut();
-        if combined_access.has_write(kind_id.id()) {
+        if combined_access.has_write(kind_info.id()) {
             panic!(
                 "NonSendMut<{}> in system {} conflicts with a previous mutable resource access ({0}). Allowing this would break Rust's mutability rules. Consider removing the duplicate access.",
                 std::any::type_name::<T>(), system_state.name);
-        } else if combined_access.has_read(kind_id.id()) {
+        } else if combined_access.has_read(kind_info.id()) {
             panic!(
                 "NonSendMut<{}> in system {} conflicts with a previous immutable resource access ({0}). Allowing this would break Rust's mutability rules. Consider removing the duplicate access.",
                 std::any::type_name::<T>(), system_state.name);
         }
-        combined_access.add_write(kind_id.id());
+        combined_access.add_write(kind_info.id());
 
         let resource_archetype = world.archetypes.resource();
         let archetype_component_id = resource_archetype
-            .get_archetype_component_id(component_id.id())
+            .get_archetype_component_id(kind_info.id(), None)
             .unwrap();
         system_state
             .archetype_component_access
             .add_write(archetype_component_id);
         Self {
-            component_id: component_id.id(),
+            component_id: kind_info.id(),
             marker: PhantomData,
         }
     }
