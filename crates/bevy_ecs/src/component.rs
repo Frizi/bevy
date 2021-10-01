@@ -5,6 +5,7 @@ pub use bevy_ecs_macros::Component;
 use std::{
     alloc::Layout,
     any::{Any, TypeId},
+    borrow::Cow,
 };
 use thiserror::Error;
 
@@ -162,7 +163,7 @@ impl SparseSetIndex for ComponentId {
 
 #[derive(Debug)]
 pub struct ComponentDescriptor {
-    name: String,
+    name: Cow<'static, str>,
     // SAFETY: This must remain private. It must match the statically known StorageType of the
     // associated rust component type if one exists.
     storage_type: StorageType,
@@ -182,7 +183,7 @@ impl ComponentDescriptor {
 
     pub fn new<T: Component>() -> Self {
         Self {
-            name: std::any::type_name::<T>().to_string(),
+            name: Cow::Borrowed(std::any::type_name::<T>()),
             storage_type: T::Storage::STORAGE_TYPE,
             is_send_and_sync: true,
             type_id: Some(TypeId::of::<T>()),
@@ -193,7 +194,7 @@ impl ComponentDescriptor {
 
     pub fn new_resource<T: Resource>(storage_type: StorageType) -> Self {
         Self {
-            name: std::any::type_name::<T>().to_string(),
+            name: Cow::Borrowed(std::any::type_name::<T>()),
             storage_type,
             is_send_and_sync: true,
             type_id: Some(TypeId::of::<T>()),
@@ -204,7 +205,7 @@ impl ComponentDescriptor {
 
     fn new_non_send<T: Any>(storage_type: StorageType) -> Self {
         Self {
-            name: std::any::type_name::<T>().to_string(),
+            name: Cow::Borrowed(std::any::type_name::<T>()),
             storage_type,
             is_send_and_sync: false,
             type_id: Some(TypeId::of::<T>()),
@@ -241,7 +242,7 @@ pub enum ComponentsError {
     #[error("A component of type {name:?} ({type_id:?}) already exists")]
     ComponentAlreadyExists {
         type_id: TypeId,
-        name: String,
+        name: Cow<'static, str>,
         existing_id: ComponentId,
     },
 }
